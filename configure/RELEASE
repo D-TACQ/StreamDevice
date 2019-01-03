@@ -15,12 +15,14 @@ TEMPLATE_TOP=$(EPICS_BASE)/templates/makeBaseApp/top
 #INSTALL_LOCATION_APP=<fullpathname>
 
 # For SynApps:
-RELEASE=
+#RELEASE=
 
-EPICS_BASE=/usr/local/epics/base-7.0.1
-ASYN=~/top-7/asyn4-33
-CALC=~/top-7/SynApps/calc-2-8
-PCRE=~/top-7/pcre-7-2
+EPICS_BASE=/usr/local/epics/base
+ASYN=/usr/local/epics/modules/asyn/
+#CALC=~/top-7/SynApps/calc-2-8
+#PCRE=/usr/include/pcre.ha
+#
+
 
 #EPICS_BASE=/usr/local/epics/base-3.16.1
 #ASYN=~/top-3.16/asyn4-30
