@@ -20,7 +20,7 @@ SUPPORT=${EPICS_HOME}/support
 
 ASYN=$(SUPPORT)/asyn
 #CALC=$(SUPPORT)/calc-3-7
-#PCRE=$(SUPPORT)/pcre-7-2
+PCRE=$(SUPPORT)/pcre
 
 # EPICS_BASE usually appears last so other apps can override stuff:
 #EPICS_BASE=/usr/local/epics/base-7.0.3
