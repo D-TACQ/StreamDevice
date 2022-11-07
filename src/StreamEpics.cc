@@ -1,26 +1,36 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 1999 Dirk Zimoch (zimoch@delta.uni-dortmund.de)          *
-* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the interface to EPICS for StreamDevice.             *
-* Please refer to the HTML files in ../docs/ for a detailed    *
-* documentation.                                               *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
+/*************************************************************************
+* This is the StreamDevice interface to EPICS.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 1999,2005 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
 
 #include <errno.h>
-#include "StreamCore.h"
-#include "StreamError.h"
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#if defined(vxWorks)
+#include <symLib.h>
+#include <sysSymTbl.h>
+#endif
 
 #include "epicsVersion.h"
 #ifdef BASE_VERSION
@@ -28,6 +38,10 @@
 #endif
 
 #ifdef EPICS_3_13
+#include <semLib.h>
+#include <wdLib.h>
+#include <taskLib.h>
+
 extern "C" {
 #endif
 
@@ -40,18 +54,11 @@ extern "C" {
 #include "recGbl.h"
 #include "devLib.h"
 #include "callback.h"
+#include "initHooks.h"
 
-#include <ctype.h>
-#include <stdarg.h>
-#include <stdlib.h>
 #ifdef EPICS_3_13
-
-#include <semLib.h>
-#include <wdLib.h>
-#include <taskLib.h>
-
+static char* epicsStrDup(const char *s) { char* c = (char*)malloc(strlen(s)+1); strcpy(c, s); return c; }
 extern DBBASE *pdbbase;
-
 } // extern "C"
 
 #else // !EPICS_3_13
@@ -63,31 +70,27 @@ extern DBBASE *pdbbase;
 #include "epicsThread.h"
 #include "epicsString.h"
 #include "registryFunction.h"
-#include "epicsStdioRedirect.h"
 #include "iocsh.h"
-
-#if defined(VERSION_INT) || EPICS_MODIFICATION >= 11
-#include "initHooks.h"
-#define WITH_IOC_RUN
-#endif
+#include "epicsExport.h"
 
 #if !defined(VERSION_INT) && EPICS_MODIFICATION < 9
 // iocshCmd() is missing in iocsh.h (up to R3.14.8.2)
-// To build with win32-x86, you MUST fix iocsh.h.
+// To build for Windows, you MUST fix iocsh.h.
 // Move the declaration below to iocsh.h and rebuild base.
 extern "C" epicsShareFunc int epicsShareAPI iocshCmd(const char *command);
 #endif
 
 #endif // !EPICS_3_13
 
-#if defined(__vxworks) || defined(vxWorks)
-#include <symLib.h>
-#include <sysSymTbl.h>
-#endif
-
+#include "StreamCore.h"
+#include "StreamError.h"
 #include "devStream.h"
 
 #define Z PRINTF_SIZE_T_PREFIX
+
+#if defined(VERSION_INT) || EPICS_MODIFICATION >= 11
+#define WITH_IOC_RUN
+#endif
 
 // More flags: 0x00FFFFFF used by StreamCore
 const unsigned long InDestructor  = 0x0100000;
@@ -161,17 +164,11 @@ class Stream : protected StreamCore
     Stream(dbCommon* record, const struct link *ioLink,
         streamIoFunction readData, streamIoFunction writeData);
     ~Stream();
-    long parseLink(const struct link *ioLink, char* filename, char* protocol,
-        char* busname, int* addr, char* busparam);
-    long initRecord(const char* filename, const char* protocol,
-        const char* busname, int addr, const char* busparam);
+    long initRecord(char* linkstring);
     bool print(format_t *format, va_list ap);
     ssize_t scan(format_t *format, void* pvalue, size_t maxStringSize);
     bool process();
-
-#ifdef WITH_IOC_RUN
     static void initHook(initHookState);
-#endif
 
 // device support functions
     friend long streamInitRecord(dbCommon *record, const struct link *ioLink,
@@ -196,6 +193,9 @@ public:
 extern "C" { // needed for Windows
 epicsExportAddress(int, streamDebug);
 epicsExportAddress(int, streamError);
+epicsExportAddress(int, streamDebugColored);
+epicsExportAddress(int, streamErrorDeadTime);
+epicsExportAddress(int, streamMsgTimeStamped);
 }
 
 // for subroutine record
@@ -211,7 +211,7 @@ long streamReload(const char* recordname)
     int oldStreamError = streamError;
     streamError = 1;
 
-    if(!pdbbase) {
+    if (!pdbbase) {
         error("No database has been loaded\n");
         streamError = oldStreamError;
         return ERROR;
@@ -223,7 +223,7 @@ long streamReload(const char* recordname)
         if (recordname && recordname[0] &&
 #ifdef EPICS_3_13
             strcmp(stream->name(), recordname) == 0)
-#else        
+#else
             !epicsStrGlobMatch(stream->name(), recordname))
 #endif
             continue;
@@ -328,7 +328,6 @@ epicsExportAddress(drvet, stream);
 #ifdef EPICS_3_13
 void streamEpicsPrintTimestamp(char* buffer, size_t size)
 {
-    size_t tlen;
     char* c;
     TS_STAMP tm;
     tsLocalTime (&tm);
@@ -337,16 +336,17 @@ void streamEpicsPrintTimestamp(char* buffer, size_t size)
     if (c) {
         c[4] = 0;
     }
-    tlen = strlen(buffer);
-    sprintf(buffer+tlen, " %.*s", (int)(size-tlen-2), taskName(0));
+}
+
+static const char* epicsThreadGetNameSelf()
+{
+    return taskName(0);
 }
 #else // !EPICS_3_13
 void streamEpicsPrintTimestamp(char* buffer, size_t size)
 {
-    size_t tlen;
     epicsTime tm = epicsTime::getCurrent();
-    tlen = tm.strftime(buffer, size, "%Y/%m/%d %H:%M:%S.%06f");
-    sprintf(buffer+tlen, " %.*s", (int)(size-tlen-2), epicsThreadGetNameSelf());
+    tm.strftime(buffer, size, "%Y/%m/%d %H:%M:%S.%06f");
 }
 #endif // !EPICS_3_13
 
@@ -355,6 +355,13 @@ report(int interest)
 {
     debug("Stream::report(interest=%d)\n", interest);
     printf("  %s\n", StreamVersion);
+    printf("  (C) 1999 Dirk Zimoch (dirk.zimoch@psi.ch)\n");
+    if (interest == 100)
+    {
+        printf("\n%s", license());
+        return OK;
+    }
+    printf("  Use interest level 100 for license information\n");
 
     printf("  registered bus interfaces:\n");
     StreamBusInterfaceClass interface;
@@ -365,6 +372,7 @@ report(int interest)
     }
 
     if (interest < 1) return OK;
+
     printf("  registered converters:\n");
     StreamFormatConverter* converter;
     int c;
@@ -428,13 +436,21 @@ long streamReportRecord(const char* recordname)
     return OK;
 }
 
+#if defined(_WIN32) && !defined(_WIN64)
+static const char* epicsThreadGetNameSelfWrapper(void)
+{
+    return epicsThreadGetNameSelf();
+}
+#define epicsThreadGetNameSelf epicsThreadGetNameSelfWrapper
+#endif
+
 long Stream::
 drvInit()
 {
     char* path;
     debug("drvStreamInit()\n");
     path = getenv("STREAM_PROTOCOL_PATH");
-#if defined(__vxworks) || defined(vxWorks)
+#if defined(vxWorks)
     // for compatibility reasons look for global symbols
     if (!path)
     {
@@ -451,54 +467,87 @@ drvInit()
 #endif
     if (!path)
         fprintf(stderr,
-            "drvStreamInit: Warning! STREAM_PROTOCOL_PATH not set. "
-            "Defaults to \"%s\"\n", StreamProtocolParser::path);
+            "drvStreamInit: Warning! STREAM_PROTOCOL_PATH not set.\n");
     else
         StreamProtocolParser::path = path;
     debug("StreamProtocolParser::path = %s\n",
         StreamProtocolParser::path);
     StreamPrintTimestampFunction = streamEpicsPrintTimestamp;
-
-#ifdef WITH_IOC_RUN
+    StreamGetThreadNameFunction = epicsThreadGetNameSelf;
     initHookRegister(initHook);
-#endif
 
     return OK;
 }
 
-#ifdef WITH_IOC_RUN
 void Stream::
 initHook(initHookState state)
 {
     Stream* stream;
 
-    if (state == initHookAtIocRun)
-    {
-        debug("Stream::initHook(initHookAtIocRun) interruptAccept=%d\n", interruptAccept);
-
-        static int inIocInit = 1;
-        if (inIocInit)
+    switch (state) {
+#ifdef WITH_IOC_RUN
+        case initHookAtIocRun:
         {
-            // We don't want to run @init twice in iocInit
-            inIocInit = 0;
-            return;
-        }
-
-        for (stream = static_cast<Stream*>(first); stream;
-            stream = static_cast<Stream*>(stream->next))
-        {
-            if (!stream->onInit) continue;
-            debug("Stream::initHook(initHookAtIocRun) Re-inititializing %s\n", stream->name());
-            if (!stream->startProtocol(StartInit))
+            // re-run @init handlers after restart
+            static int inIocInit = 1;
+            if (inIocInit)
             {
-                error("%s: Re-initialization failed.\n",
-                    stream->name());
+                // We don't want to run @init twice in iocInit
+                inIocInit = 0;
+                return;
             }
-            stream->initDone.wait();
+
+            for (stream = static_cast<Stream*>(first); stream;
+                stream = static_cast<Stream*>(stream->next))
+            {
+                if (!stream->onInit) continue;
+                debug("%s: running @init handler\n", stream->name());
+                if (!stream->startProtocol(StartInit))
+                {
+                    error("%s: @init handler failed.\n",
+                        stream->name());
+                }
+                stream->initDone.wait();
+            }
+            break;
         }
+        case initHookAtIocPause:
+        {
+            // stop polling I/O Intr
+            for (stream = static_cast<Stream*>(first); stream;
+                stream = static_cast<Stream*>(stream->next))
+            {
+                if (stream->record->scan == SCAN_IO_EVENT) {
+                    debug("%s: stopping \"I/O Intr\"\n", stream->name());
+                    stream->finishProtocol(Stream::Abort);
+                }
+            }
+            break;
+        }
+        case initHookAfterIocRunning:
+#else
+        case initHookAfterInterruptAccept:
+#endif
+        {
+            // start polling I/O Intr
+            for (stream = static_cast<Stream*>(first); stream;
+                stream = static_cast<Stream*>(stream->next))
+            {
+                if (stream->record->scan == SCAN_IO_EVENT) {
+                    debug("%s: starting \"I/O Intr\"\n", stream->name());
+                    if (!stream->startProtocol(StartAsync))
+                    {
+                        error("%s: Can't start \"I/O Intr\" protocol\n",
+                            stream->name());
+                    }
+                }
+            }
+            break;
+        }
+        default:
+            break;
     }
 }
-#endif
 
 // device support (C interface) //////////////////////////////////////////
 
@@ -534,12 +583,7 @@ long streamInitRecord(dbCommon* record, const struct link *ioLink,
     streamIoFunction readData, streamIoFunction writeData)
 {
     long status;
-    char filename[256];
-    char protocol[256];
-    char busname[256];
-    int addr = -1;
-    char busparam[256];
-    memset(busparam, 0 ,sizeof(busparam));
+    char* linkstring;
 
     debug("streamInitRecord(%s): SEVR=%d\n", record->name, record->sevr);
     Stream* stream = static_cast<Stream*>(record->dpvt);
@@ -556,19 +600,30 @@ long streamInitRecord(dbCommon* record, const struct link *ioLink,
             record->name);
         stream->finishProtocol(Stream::Abort);
     }
-    // scan the i/o link
-    debug("streamInitRecord(%s): parse link \"%s\"\n",
-        record->name, ioLink->value.instio.string);
-    status = stream->parseLink(ioLink, filename, protocol,
-        busname, &addr, busparam);
-    // (re)initialize bus and protocol
-    if (status == 0)
+    if (ioLink->type != INST_IO)
     {
-        debug("streamInitRecord(%s): calling initRecord\n",
-            record->name);
-        status = stream->initRecord(filename, protocol,
-            busname, addr, busparam);
+        error("%s: Wrong I/O link type %s\n", record->name,
+            pamaplinkType[ioLink->type].strvalue);
+        return S_dev_badInitRet;
     }
+    if (!ioLink->value.instio.string[0])
+    {
+        error("%s: Empty I/O link. "
+            "Forgot the leading '@' or confused INP with OUT or link is too long ?\n",
+            record->name);
+        return S_dev_badInitRet;
+    }
+    // (re)initialize bus and protocol
+    linkstring = epicsStrDup(ioLink->value.instio.string);
+    if (!linkstring)
+    {
+        error("%s: Out of memory", record->name);
+        return S_dev_noMemory;
+    }
+    debug("streamInitRecord(%s): calling initRecord\n",
+        record->name);
+    status = stream->initRecord(linkstring);
+    free(linkstring);
     if (status != OK && status != DO_NOT_CONVERT)
     {
         error("%s: Record initialization failed\n", record->name);
@@ -587,7 +642,6 @@ long streamReadWrite(dbCommon *record)
     if (!stream || stream->status == ERROR)
     {
         (void) recGblSetSevr(record, UDF_ALARM, INVALID_ALARM);
-        error("%s: Record not initialised correctly\n", record->name);
         return ERROR;
     }
     return stream->process() ? stream->convert : ERROR;
@@ -607,7 +661,16 @@ long streamGetIointInfo(int cmd, dbCommon *record, IOSCANPVT *ppvt)
     *ppvt = stream->ioscanpvt;
     if (cmd == 0)
     {
-        debug("streamGetIointInfo: starting protocol\n");
+#ifdef WITH_IOC_RUN
+        if (!interruptAccept) {
+            // We will start polling later in initHook.
+            debug("streamGetIointInfo(%s): start later...\n",
+                record->name);
+            return OK;
+        }
+#endif
+        debug("streamGetIointInfo(%s): start protocol\n",
+            record->name);
         // SCAN has been set to "I/O Intr"
         if (!stream->startProtocol(Stream::StartAsync))
         {
@@ -618,6 +681,8 @@ long streamGetIointInfo(int cmd, dbCommon *record, IOSCANPVT *ppvt)
     else
     {
         // SCAN is no longer "I/O Intr"
+        debug("streamGetIointInfo(%s): abort protocol\n",
+            record->name);
         stream->finishProtocol(Stream::Abort);
     }
     return OK;
@@ -699,77 +764,77 @@ Stream::
 }
 
 long Stream::
-parseLink(const struct link *ioLink, char* filename,
-    char* protocol, char* busname, int* addr, char* busparam)
+initRecord(char* linkstring /* modifiable copy */)
 {
-    // parse link parameters: filename protocol busname addr busparam
-    int n1, n2;
-    if (ioLink->type != INST_IO)
-    {
-        error("%s: Wrong I/O link type %s\n", name(),
-            pamaplinkType[ioLink->type].strvalue);
-        return S_dev_badInitRet;
-    }
-    if (0 >= sscanf(ioLink->value.instio.string, "%s%n", filename, &n1))
-    {
-        error("%s: Empty I/O link. "
-            "Forgot the leading '@' or confused INP with OUT or link is too long ?\n",
-            name());
-        return S_dev_badInitRet;
-    }
-    if (0 >= sscanf(ioLink->value.instio.string+n1, " %[^ \t(] %n", protocol, &n2))
-    {
-        error("%s: Missing protocol name\n"
-            "  expect \"@file protocol[(arg1,...)] bus [addr] [params]\"\n"
-            "  in \"@%s\"\n", name(),
-            ioLink->value.instio.string);
-        return S_dev_badInitRet;
-    }
-    n1+=n2;
-    if (ioLink->value.instio.string[n1] == '(')
-    {
-        n2 = 0;
-        sscanf(ioLink->value.instio.string+n1, " %[^)] %n", protocol+strlen(protocol), &n2);
-        n1+=n2;
-        if (ioLink->value.instio.string[n1++] != ')')
-        {
-            error("%s: Missing ')' after protocol arguments '%s'\n"
-                "  expect \"@file protocol(arg1,...) bus [addr] [params]\"\n"
-                "  in \"@%s\"\n", name(), protocol,
-                ioLink->value.instio.string);
-            return S_dev_badInitRet;
-        }
-        strcat(protocol, ")");
-    }
-    if (0 >= sscanf(ioLink->value.instio.string+n1, "%s %i %99c", busname, addr, busparam))
-    {
-        error("%s: Missing bus name\n"
-            "  expect \"@file protocol[(arg1,...)] bus [addr] [params]\"\n"
-            "  in \"@%s\"\n", name(),
-            ioLink->value.instio.string);
-        return S_dev_badInitRet;
-    }    
-    return OK;
-}
+    char *filename;
+    char *protocol;
+    char *busname;
+    char *busparam;
+    long addr = -1;
 
-long Stream::
-initRecord(const char* filename, const char* protocol,
-    const char* busname, int addr, const char* busparam)
-{
-    // It is safe to call this function again with different arguments
+    debug("Stream::initRecord %s: parse link string \"%s\"\n", name(), linkstring);
+
+    while (isspace(*linkstring)) linkstring++;
+    filename = linkstring;
+    while (*linkstring && !isspace(*linkstring)) linkstring++;
+    if (*linkstring) *linkstring++ = 0;
+
+    while (isspace(*linkstring)) linkstring++;
+    protocol = linkstring;
+    while (*linkstring && !isspace(*linkstring) && *linkstring != '(') linkstring++;
+    while (isspace(*linkstring)) linkstring++;
+    if (*linkstring == '(') {
+        int brackets = 0;
+        while(*++linkstring) {
+            if (*linkstring == '(') brackets++;
+            else if (*linkstring == ')') brackets--;
+            else if (*linkstring == '\\' && !*++linkstring) break;
+            else if (isspace(*linkstring) && brackets < 0) break;
+        }
+    }
+    else if (*linkstring) linkstring--;
+    if (*linkstring) *linkstring++ = 0;
+
+    while (isspace(*linkstring)) linkstring++;
+    busname = linkstring;
+    while (*linkstring && !isspace(*linkstring)) linkstring++;
+    if (*linkstring) *linkstring++ = 0;
+
+    if (linkstring) addr = strtol(linkstring, &linkstring, 0);
+    while (isspace(*linkstring)) linkstring++;
+    busparam = linkstring;
+
+    debug("Stream::initRecord %s: filename=\"%s\" protocol=\"%s\" bus=\"%s\" addr=%ld params=\"%s\"\n",
+        name(), filename, protocol, busname, addr, busparam);
+
+    if (!*filename)
+    {
+        error("%s: Missing protocol file name\n", name());
+        return S_dev_badInitRet;
+    }
+    if (!*protocol)
+    {
+        error("%s: Missing protocol name\n", name());
+        return S_dev_badInitRet;
+    }
+    if (!*busname)
+    {
+        error("%s: Missing bus name\n", name());
+        return S_dev_badInitRet;
+    }
 
     // attach to bus interface
-    debug("Stream::initRecord %s: attachBus(%s, %d, \"%s\")\n",
+    debug("Stream::initRecord %s: attachBus(\"%s\", %ld, \"%s\")\n",
         name(), busname, addr, busparam);
     if (!attachBus(busname, addr, busparam))
     {
-        error("%s: Can't attach to bus %s %d\n",
+        error("%s: Can't attach to bus %s %ld\n",
             name(), busname, addr);
         return S_dev_noDevice;
     }
 
     // parse protocol file
-    debug("Stream::initRecord %s: parse(%s, %s)\n",
+    debug("Stream::initRecord %s: parse(\"%s\", \"%s\")\n",
         name(), filename, protocol);
     if (!parse(filename, protocol))
     {
@@ -872,7 +937,7 @@ process()
     if (!startProtocol(record->proc == 2 ? StreamCore::StartInit : StreamCore::StartNormal))
     {
         debug("Stream::process(%s): could not start %sprotocol, status=%s (%d)\n",
-            name(), record->proc == 2 ? "@init " : "", 
+            name(), record->proc == 2 ? "@init " : "",
                 status >= 0 && status < ALARM_NSTATUS ?
                     epicsAlarmConditionStrings[status] : "ERROR",
             status);
@@ -1100,11 +1165,7 @@ getFieldAddress(const char* fieldname, StreamBuffer& address)
 }
 
 static const unsigned char dbfMapping[] =
-#ifdef DBF_INT64
-    {0, DBF_UINT64, DBF_INT64, DBF_ENUM, DBF_DOUBLE, DBF_STRING};
-#else
     {0, DBF_ULONG, DBF_LONG, DBF_ENUM, DBF_DOUBLE, DBF_STRING};
-#endif
 
 bool Stream::
 formatValue(const StreamFormat& format, const void* fieldaddress)

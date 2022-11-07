@@ -1,42 +1,45 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 1999 Dirk Zimoch (zimoch@delta.uni-dortmund.de)          *
-* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the kernel of StreamDevice.                          *
-* Please refer to the HTML files in ../docs/ for a detailed    *
-* documentation.                                               *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
+/*************************************************************************
+* This is the core of StreamDevice.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 1999,2005 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
 
-#include "StreamCore.h"
-#include "StreamError.h"
 #include <ctype.h>
 #include <stdlib.h>
 
+#include "StreamCore.h"
+#include "StreamError.h"
+
 #define Z PRINTF_SIZE_T_PREFIX
 
-ENUM (Commands,
-    end, in, out, wait, event, exec, connect, disconnect);
+int streamErrorDeadTime = 0;
 
 /// debug functions /////////////////////////////////////////////
 
-static char* printCommands(StreamBuffer& buffer, const char* c)
+char* StreamCore::
+printCommands(StreamBuffer& buffer, const char* c)
 {
     unsigned long timeout;
     unsigned long eventnumber;
     while (1)
     {
-        switch(*c++)
+        switch (*c++)
         {
             case end:
                 return buffer();
@@ -72,9 +75,9 @@ static char* printCommands(StreamBuffer& buffer, const char* c)
                 buffer.append("    disconnect;\n");
                 break;
             default:
-                buffer.append("\033[31;1mGARBAGE: ");
+                buffer.append(ansiEscape(ANSI_RED_BOLD)).append("GARBAGE: ");
                 c = StreamProtocolParser::printString(buffer, c-1);
-                buffer.append("\033[0m\n");
+                buffer.append(ansiEscape(ANSI_RESET)).append("\n");
         }
     }
 }
@@ -122,12 +125,11 @@ printProtocol(FILE* file)
 StreamCore* StreamCore::first = NULL;
 
 StreamCore::
-StreamCore() : activeCommand(end)
+StreamCore() : StreamBusInterface::Client(),
+    next(), streamname(), flags(None), inTerminatorDefined(), outTerminatorDefined(),
+    activeCommand(end), previousResult(Success), numberOfErrors(0), unparsedInput()
 {
     businterface = NULL;
-    flags = None;
-    next = NULL;
-    unparsedInput = false;
     // add myself to list of streams
     StreamCore** pstream;
     for (pstream = &first; *pstream; pstream = &(*pstream)->next);
@@ -187,18 +189,33 @@ bool StreamCore::
 parse(const char* filename, const char* _protocolname)
 {
     protocolname = _protocolname;
-    // extract substitutions from protocolname "name(sub1,sub2)"
+    // extract substitutions from protocolname "name ( sub1, sub2 ) "
     ssize_t i = protocolname.find('(');
-    if (i >= 0)
+    if (i < 0) i = 0;
+    while (protocolname[i-1] == ' ')
+        protocolname.remove(--i, 1);
+    if (protocolname[i] == '(')
     {
-        while (i >= 0)
+        while (i < (ssize_t)protocolname.length())
         {
             if (protocolname[i-1] == ' ')
                 protocolname.remove(--i, 1); // remove trailing space
-            protocolname[i] = '\0'; // replace '(' and ',' with '\0'
+            protocolname[i] = '\0'; // replace initial '(' and separating ',' with '\0'
             if (protocolname[i+1] == ' ')
                 protocolname.remove(i+1, 1); // remove leading space
-            i = protocolname.find(',', i+1);
+            int brackets = 0;
+            do {
+                i++;
+                i += strcspn(protocolname(i), ",()\\");
+                char c = protocolname[i];
+                if (c == '(') brackets++;
+                else if (c == ')') brackets--;
+                else if (c == ',' && brackets <= 0) break;
+                else if (c == '\\') {
+                    if (protocolname[i+1] == '\\') i++; // keep '\\'
+                    else protocolname.remove(i, 1); // else skip over next char
+                }
+            } while (i < (ssize_t)protocolname.length());
         }
         // should have closing parentheses
         if (protocolname[-1] != ')')
@@ -208,9 +225,8 @@ parse(const char* filename, const char* _protocolname)
         }
         protocolname.truncate(-1); // remove ')'
         if (protocolname[-1] == ' ')
-        {
             protocolname.truncate(-1); // remove trailing space
-        }
+        debug("StreamCore::parse \"%s\" -> \"%s\"\n", _protocolname, protocolname.expand()());
     }
     StreamProtocolParser::Protocol* protocol;
     protocol = StreamProtocolParser::getProtocol(filename, protocolname);
@@ -449,10 +465,10 @@ finishProtocol(ProtocolResult status)
     debug("StreamCore::finishProtocol(%s, %s) %sbus owner\n",
         name(), toStr(status), flags & BusOwner ? "" : "not ");
 
-    if (flags & BusPending)
+    if (status == Success && flags & BusPending)
     {
-        error("StreamCore::finishProtocol(%s): Still waiting for %s%s%s\n",
-            name(),
+        error("StreamCore::finishProtocol(%s, %s): Still waiting for %s%s%s\n",
+            name(), toStr(status),
             flags & LockPending ? "lockSuccess() " : "",
             flags & WritePending ? "writeSuccess() " : "",
             flags & WaitPending ? "timerCallback()" : "");
@@ -475,6 +491,8 @@ finishProtocol(ProtocolResult status)
         switch (status)
         {
             case Success:
+                previousResult = Success;
+                numberOfErrors = 0;
                 handler = NULL;
                 break;
             case WriteTimeout:
@@ -903,11 +921,10 @@ evalIn()
         debug("StreamCore::evalIn(%s): early input: %s\n",
             name(), inputBuffer.expand()());
         expectedInput = readCallback(lastInputStatus, NULL, 0);
-        if (!expectedInput)
-        {
-            // no more input needed
+        if (expectedInput == 0)
             return true;
-        }
+        if (expectedInput == -1) // don't know how much
+            expectedInput = 0;
     }
     if (flags & AsyncMode)
     {
@@ -978,8 +995,10 @@ readCallback(StreamIoStatus status,
                 evalIn();
                 return 0;
             }
-            debug("StreamCore::readCallback(%s): No reply from device within %ld ms\n",
-                name(), replyTimeout);
+            if (checkShouldPrint(ReplyTimeout)) {
+                error("%s: No reply within %ld ms to \"%s\"\n",
+                    name(), replyTimeout, outputLine.expand()());
+            }
             inputBuffer.clear();
             finishProtocol(ReplyTimeout);
             return 0;
@@ -1080,7 +1099,7 @@ readCallback(StreamIoStatus status,
             if (maxInput)
                 return maxInput - inputBuffer.length();
             else
-                return -1;
+                return -1; // We don't know for how much to wait
         }
         // try to parse what we got
         end = inputBuffer.length();
@@ -1096,9 +1115,11 @@ readCallback(StreamIoStatus status,
         }
         else
         {
-            error("%s: Timeout after reading %" Z "d byte%s \"%s%s\"\n",
-                name(), end, end==1 ? "" : "s", end > 20 ? "..." : "",
-                inputBuffer.expand(-20)());
+            if (checkShouldPrint(ReadTimeout)) {
+                error("%s: Timeout after reading %" Z "d byte%s \"%s%s\"\n",
+                    name(), end, end==1 ? "" : "s", end > 20 ? "..." : "",
+                    inputBuffer.expand(-20)());
+            }
         }
     }
 
@@ -1346,7 +1367,7 @@ normal_format:
                     {
                         int i = 0;
                         while (commandIndex[i] >= ' ') i++;
-                        error("%s: Input \"%s%s%s\"\n", 
+                        error("%s: Input \"%s%s%s\"\n",
                             name(),
                             consumedInput > 20 ? "..." : "",
                             inputLine.expand(consumedInput > 20 ? consumedInput-20 : 0, 40)(),
@@ -1359,7 +1380,7 @@ normal_format:
                             consumedInput > 10 ? "..." : "",
                             inputLine.expand(consumedInput > 10 ? consumedInput-10 : 0,
                                 consumedInput > 10 ? 10 : consumedInput)());
-                        
+
                         error("%s: got \"%s%s\" where \"%s\" was expected\n",
                             name(),
                             inputLine.expand(consumedInput, 10)(),
@@ -1790,6 +1811,57 @@ printStatus(StreamBuffer& buffer)
     if (flags & WaitPending)      buffer.append(" WaitPending");
     if (flags & Aborted)          buffer.append(" Aborted");
     busPrintStatus(buffer);
+}
+
+const char* StreamCore::
+license(void)
+{
+    return
+        "StreamDevice is free software: You can redistribute it and/or modify\n"
+        "it under the terms of the GNU Lesser General Public License as published\n"
+        "by the Free Software Foundation, either version 3 of the License, or\n"
+        "(at your option) any later version.\n"
+        "\n"
+        "StreamDevice is distributed in the hope that it will be useful,\n"
+        "but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
+        "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the\n"
+        "GNU Lesser General Public License for more details\n"
+        "\n"
+        "You should have received a copy of the GNU Lesser General Public License\n"
+        "along with StreamDevice. If not, see https://www.gnu.org/licenses/.\n";
+}
+
+/**
+ * \brief Checks whether an error message should be printed based on the new error type.
+ *
+ * Will check based on the error type and the time since last error of the same type
+ * whether to print the new error. Also has a number of side effects such as counting
+ * up errors of each type and resetting the time since last error.
+ *
+ * \param[in] newErrorType the type of the new error
+ * \return true if the error should be preinted, else false
+ */
+bool  StreamCore::checkShouldPrint(ProtocolResult newErrorType)
+{
+    if (previousResult != newErrorType) {
+        previousResult = newErrorType;
+        numberOfErrors = 0;
+        time(&lastErrorTime);
+        return true;
+    }
+    else if ((int)(time(NULL) - lastErrorTime) > streamErrorDeadTime) {
+        time(&lastErrorTime);
+        if (numberOfErrors != 0) {
+            error("%s: %i additional errors of the following type seen in the last %i seconds\n",
+                name(), numberOfErrors, streamErrorDeadTime);
+        }
+        numberOfErrors = 0;
+        return true;
+    }
+    else {
+        numberOfErrors++;
+        return false;
+    }
 }
 
 #include "streamReferences"

@@ -1,25 +1,24 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the interface to asyn driver for StreamDevice.       *
-* Please refer to the HTML files in ../docs/ for a detailed    *
-* documentation.                                               *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
-
-#include "StreamBusInterface.h"
-#include "StreamError.h"
-#include "StreamBuffer.h"
+/*************************************************************************
+* This is the interface to asyn driver for StreamDevice.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
 
 #ifdef EPICS_3_13
 #include <assert.h>
@@ -32,7 +31,6 @@ extern "C" {
 #include "epicsAssert.h"
 #include "epicsTime.h"
 #include "epicsTimer.h"
-#include "epicsStdioRedirect.h"
 #include "iocsh.h"
 #endif
 
@@ -42,6 +40,9 @@ extern "C" {
 #include "asynUInt32Digital.h"
 #include "asynGpibDriver.h"
 
+#include "StreamBusInterface.h"
+#include "StreamError.h"
+#include "StreamBuffer.h"
 #include "devStream.h"
 #include "MacroMagic.h"
 
@@ -162,7 +163,7 @@ class AsynDriverInterface : StreamBusInterface
     double writeTimeout;
     double readTimeout;
     double replyTimeout;
-    size_t expectedLength;
+    ssize_t expectedLength;
     unsigned long eventMask;
     unsigned long receivedEvent;
     StreamBuffer inputBuffer;
@@ -187,7 +188,7 @@ class AsynDriverInterface : StreamBusInterface
     bool writeRequest(const void* output, size_t size,
         unsigned long writeTimeout_ms);
     bool readRequest(unsigned long replyTimeout_ms,
-        unsigned long readTimeout_ms, size_t expectedLength, bool async);
+        unsigned long readTimeout_ms, ssize_t expectedLength, bool async);
     bool acceptEvent(unsigned long mask, unsigned long replytimeout_ms);
     bool supportsEvent();
     bool supportsAsyncRead();
@@ -456,10 +457,6 @@ connectToBus(const char* portname, int addr)
         // asynDriver does not know this portname/address
         return false;
     }
-
-    // disable asyn errors to avoid flooding when device is disconnected
-    // user can re-enable later
-    pasynTrace->setTraceMask(pasynUser, 0);
 
     asynInterface* pasynInterface;
 
@@ -804,7 +801,7 @@ writeHandler()
 // interface function: we want to read something
 bool AsynDriverInterface::
 readRequest(unsigned long replyTimeout_ms, unsigned long readTimeout_ms,
-    size_t _expectedLength, bool async)
+    ssize_t _expectedLength, bool async)
 {
     debug("AsynDriverInterface::readRequest(%s, %ld msec reply, "
         "%ld msec read, expect %" Z "u bytes, async=%s)\n",
@@ -888,14 +885,11 @@ readHandler()
             if (pasynOctet->setInputEos(pvtOctet, pasynUser,
                 deveos, (int)deveoslen) == asynSuccess)
             {
-                if (ioAction != AsyncRead)
-                {
-                    debug("AsynDriverInterface::readHandler(%s) "
-                        "input EOS changed from \"%s\" to \"%s\"\n",
-                        clientName(),
-                        StreamBuffer(oldeos, oldeoslen).expand()(),
-                        StreamBuffer(deveos, deveoslen).expand()());
-                }
+                debug2("AsynDriverInterface::readHandler(%s) "
+                    "input EOS changed from \"%s\" to \"%s\"\n",
+                    clientName(),
+                    StreamBuffer(oldeos, oldeoslen).expand()(),
+                    StreamBuffer(deveos, deveoslen).expand()());
                 break;
             }
             deveos++; deveoslen--;
@@ -949,20 +943,18 @@ readHandler()
         eomReason = 0;
         pasynUser->errorMessage[0] = 0;
 
-        debug("AsynDriverInterface::readHandler(%s): ioAction=%s "
-            "read(..., bytesToRead=%" Z "u, ...) "
-            "[timeout=%g sec]\n",
-            clientName(), toStr(ioAction),
-            bytesToRead, pasynUser->timeout);
         status = pasynOctet->read(pvtOctet, pasynUser,
             buffer, bytesToRead, &received, &eomReason);
-        // Even though received is size_t I have seen (size_t)-1 here!
-        debug("AsynDriverInterface::readHandler(%s): "
-            "read returned %s: ioAction=%s received=%" Z "d, "
-            "eomReason=%s, buffer=\"%s\"\n",
-            clientName(), toStr(status), toStr(ioAction),
-            received, eomReasonToStr(eomReason),
-            StreamBuffer(buffer, received).expand()());
+        // Even though received is size_t I have seen (size_t)-1 here
+        // in case half a terminator had been read last time!
+        if (!(status == asynTimeout && pasynUser->timeout == 0 && received == 0))
+            debug("AsynDriverInterface::readHandler(%s): ioAction=%s "
+                "read(%" Z "u bytes, timeout=%g sec) returned status %s: received=%" Z "d bytes, "
+                "eomReason=%s, buffer=\"%s\"\n",
+                clientName(), toStr(ioAction),
+                bytesToRead, pasynUser->timeout, toStr(status), received,
+                eomReasonToStr(eomReason), StreamBuffer(buffer, received).expand()());
+
         // asyn 4.16 sets reason to ASYN_EOM_END when device disconnects.
         // What about earlier versions?
         if (!connected) eomReason |= ASYN_EOM_END;
@@ -1038,7 +1030,7 @@ readHandler()
                     // reply timeout
                     if (ioAction == AsyncRead)
                     {
-                        debug("AsynDriverInterface::readHandler(%s): "
+                        debug2("AsynDriverInterface::readHandler(%s): "
                             "no async input, retry in in %g seconds\n",
                             clientName(), replyTimeout);
                         // start next poll after timer expires
@@ -1141,9 +1133,10 @@ readHandler()
     {
         pasynOctet->setInputEos(pvtOctet, pasynUser,
             oldeos, oldeoslen);
-        debug("AsynDriverInterface::readHandler(%s) "
-            "input EOS restored to \"%s\"\n",
+        debug2("AsynDriverInterface::readHandler(%s) "
+            "input EOS restored from \"%s\" to \"%s\"\n",
             clientName(),
+            StreamBuffer(deveos, deveoslen).expand()(),
             StreamBuffer(oldeos, oldeoslen).expand()());
     }
 }
@@ -1361,8 +1354,6 @@ timerExpired()
             // at the moment if another asynUser got input right now.
             // queueRequest might fail if another request was just queued
             pasynManager->isAutoConnect(pasynUser, &autoconnect);
-            debug("%s: polling for I/O Intr: autoconnected: %d, connect: %d\n",
-                clientName(), autoconnect, connected);
             if (autoconnect && !connected)
             {
                 // has explicitely been disconnected
@@ -1376,7 +1367,7 @@ timerExpired()
                 asynStatus status = pasynManager->queueRequest(pasynUser,
                     asynQueuePriorityLow, -1.0);
                 // if this fails, we are already queued by another thread
-                debug("AsynDriverInterface::timerExpired %s: "
+                debug2("AsynDriverInterface::timerExpired %s: "
                     "queueRequest(..., priority=Low, queueTimeout=-1) = %s %s\n",
                     clientName(), toStr(status),
                     status!=asynSuccess ? pasynUser->errorMessage : "");
@@ -1494,7 +1485,7 @@ void AsynDriverInterface::
 handleRequest()
 {
     cancelTimer();
-    debug("AsynDriverInterface::handleRequest(%s) %s\n",
+    debug2("AsynDriverInterface::handleRequest(%s) %s\n",
         clientName(), toStr(ioAction));
     switch (ioAction)
     {

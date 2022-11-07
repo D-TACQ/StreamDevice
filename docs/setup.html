@@ -17,9 +17,9 @@
 <p>
 <em>StreamDevice</em> works with
 <a href="https://epics.anl.gov/base/index.php">EPICS base</a>
-versions from R3.14.6 on, tested up to 7.0.1.
+versions from R3.14.6 on, tested up to 7.0.3.
 It also works (with limitations) with older
-<a href="https://www.aps.anl.gov/epics/base/R3-13.php">R3.13</a> 
+<a href="https://epics.anl.gov/base/R3-13.php">R3.13</a> 
 versions from R3.13.7 on.
 How to use <em>StreamDevice</em> with EPICS R3.13 is described on a
 <a href="epics3_13.html">separate page</a>.
@@ -54,15 +54,17 @@ git clone https://github.com/paulscherrerinstitute/StreamDevice.git
 <p class="new">
 <em>StreamDevice</em> now comes with a standard
 <kbd>configure</kbd> directory.
-But it can still be built in an external <em>&lt;top&gt;</em>
+<del>But it can still be built in an external <em>&lt;top&gt;</em>
 directory as in previous versions.
 It will automatically detect <em>&lt;top&gt;</em> locations
 from the presence of <kbd>../configure</kbd> or <kbd>../config</kbd>
-directories.
+directories.</del> Using an upper level <kbd>../configure</kbd> is
+no longer supported due to compatibility issues with <em>SynApps</em>.
 </p>
 <p class="new">
 Edit the <kbd>configure/RELEASE</kbd> file to specify the install location
-of EPICS base and of additional software modules, for example:
+of EPICS base and of additional software modules or add a
+<kbd>configure/RELEASE.local</kbd> file to overwrite, for example:
 <pre>
 EPICS_BASE=/home/epics/base-3.16.1
 </pre>
@@ -377,8 +379,65 @@ protocol is loaded.
 See the <a href="protocol.html">next chapter</a> for protocol files in depth.
 </p>
 
+<a name="debug"></a>
+<h2>5. Debug and Error Messages</h2>
+<p>
+Generation of debug and error messages is controlled with two shell variables,
+<code>streamDebug</code> and <code>streamError</code>.
+Setting those variables to 1 (actually to any number but 0) enables the
+messages.
+Per default debug messages are switched off and error messages are switched on.
+Errors occuring while loading protocol files are always shown.
+</p>
+<p>
+Warning: Enabling debug messages can create a lot of output!
+At the moment, there is no way to set filters on debug or error messages.
+</p>
+<p>
+Debug output can be redirected to a file with the command
+<code>streamSetLogfile("<var>filename</var>")</code>.
+When called without a filename, debug output is directed back
+to the console.
+</p>
+<p>
+By default the debug/error output is set to be colored if the terminal allows
+it but this can be set to always colored or never colored by setting 
+<code>streamDebugColored</code> to 1 or 0 respectively.
+</p>
+<p>
+Error and debug messages are prefixed with a time stamp unless the variable
+<code>streamMsgTimeStamped</code> is set to 0.
+</p>
+<p>
+When a device is disconnected StreamDevice can produce many repeated timeout 
+messages. To reduce this logging you can set <code>streamErrorDeadTime</code>
+to an integer number of seconds. When this is set repeated timeout messages 
+will not be printed in the specified dead time after the last message. The 
+default dead time is 0, resulting in every message being printed.
+</p>
+
+<h3>Example (vxWorks):</h3>
+<pre>
+streamError=1
+streamDebug=1
+streamDebugColored=1
+streamErrorDeadTime=30
+streamMsgTimeStamped=1
+streamSetLogfile("logfile.txt")
+</pre>
+
+<h3>Example (iocsh):</h3>
+<pre>
+var streamError 1
+var streamDebug 1
+var streamDebugColored 1
+var streamErrorDeadTime 30
+var streamMsgTimeStamped 1
+streamSetLogfile("logfile.txt")
+</pre>
+
 <a name="rec"></a>
-<h2>5. Configuring the Records</h2>
+<h2>6. Configuring the Records</h2>
 <p>
 To tell a record to use <em>StreamDevice</em>, set its <code>DTYP</code> field to
 <code>"stream"</code>.

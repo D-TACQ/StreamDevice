@@ -1,13 +1,28 @@
-TOP = ../..
-ifneq ($(wildcard ../../configure),)
-  include $(TOP)/configure/CONFIG
-else ifneq ($(wildcard ../../config),)
-  include $(TOP)/config/CONFIG_APP
-  include $(TOP)/config/RULES_ARCHS
-else
-  TOP= ..
-  include $(TOP)/configure/CONFIG
-endif
+##########################################################################
+# This is an EPICS 3.14+ Makefile for StreamDevice.
+# Normally it should not be necessary to modify this file.
+# All configuration can be done in CONFIG_STREAM
+#
+# (C) 2007,2018 Dirk Zimoch (dirk.zimoch@psi.ch)
+#
+# This file is part of StreamDevice.
+#
+# StreamDevice is free software: You can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# StreamDevice is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+#########################################################################/
+
+TOP= ..
+include $(TOP)/configure/CONFIG
 
 PROD = streamApp
 DBD  = streamApp.dbd
@@ -40,8 +55,13 @@ ifneq ($(words $(CALC) $(SYNAPPS)), 0)
 # With synApps scalcout record
 streamApp_DBD += calcSupport.dbd
 PROD_LIBS += calc
-# older calc versions require sscan
-#PROD_LIBS += sscan
+ifneq ($(words $(SSCAN) $(SYNAPPS)), 0)
+PROD_LIBS += sscan
+endif
+endif
+
+ifneq ($(words $(SNCSEQ) $(SYNAPPS)), 0)
+PROD_LIBS += seq pv
 endif
 
 streamApp_DBD += stream.dbd
@@ -57,6 +77,13 @@ endif
 endif
 
 PROD_LIBS += $(EPICS_BASE_IOC_LIBS)
+
+# Some linux systems moved RPC related symbols to libtirpc
+# Define TIRPC in configure/CONFIG_SITE in this case
+ifeq ($(TIRPC),YES)
+  USR_INCLUDES_Linux += -I/usr/include/tirpc
+  PROD_SYS_LIBS_DEFAULT += tirpc
+endif
 
 # switch off annoying rset warnings in 3.16+
 CPPFLAGS += -DUSE_TYPED_RSET

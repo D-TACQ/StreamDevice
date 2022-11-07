@@ -1,22 +1,24 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 1999 Dirk Zimoch (zimoch@delta.uni-dortmund.de)          *
-* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the kernel of StreamDevice.                          *
-* Please refer to the HTML files in ../docs/ for a detailed    *
-* documentation.                                               *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
+/*************************************************************************
+* This is the core of StreamDevice.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 1999,2005 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
 
 #ifndef StreamCore_h
 #define StreamCore_h
@@ -71,7 +73,7 @@ void acceptEvent(unsigned short mask, unsigned short timeout)
 ***************************************/
 
 #include "MacroMagic.h"
-
+#include "time.h"
 
 // Flags: 0x00FFFFFF reserved for StreamCore
 const unsigned long None             = 0x0000;
@@ -93,6 +95,9 @@ const unsigned long ClearOnStart     = InitRun|AsyncMode|GotValue|Aborted|
                                        BusOwner|Separator|ScanTried|
                                        AcceptInput|AcceptEvent|BusPending;
 
+// The amount of time to wait before printing duplicated messages
+extern int streamErrorDeadTime;
+
 struct StreamFormat;
 
 class StreamCore :
@@ -106,6 +111,9 @@ protected:
 
     ENUM(StartMode,
         StartNormal, StartInit, StartAsync);
+
+    ENUM (Commands,
+        end, in, out, wait, event, exec, connect, disconnect);
 
     class MutexLock
     {
@@ -168,6 +176,11 @@ protected:
     ProtocolResult runningHandler;
     StreamBuffer fieldAddress;
 
+    // Keep track of errors to reduce logging frequencies
+    ProtocolResult previousResult;
+    time_t lastErrorTime;
+    int numberOfErrors;
+
     StreamIoStatus lastInputStatus;
     bool unparsedInput;
 
@@ -221,6 +234,11 @@ public:
     void printProtocol(FILE* = stdout);
     const char* name() { return streamname; }
     void printStatus(StreamBuffer& buffer);
+    static const char* license(void);
+
+private:
+    char* printCommands(StreamBuffer& buffer, const char* c);
+    bool  checkShouldPrint(ProtocolResult newErrorType);
 };
 
 #endif

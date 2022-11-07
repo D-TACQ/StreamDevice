@@ -1,28 +1,33 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 1999 Dirk Zimoch (zimoch@delta.uni-dortmund.de)          *
-* (C) 2007 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the regexp format converter of StreamDevice.         *
-* Please refer to the HTML files in ../docs/ for a detailed    *
-* documentation.                                               *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
+/*************************************************************************
+* This is the regular expression format converter of StreamDevice.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 1999,2007 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
+
+#include <string.h>
+#include <limits.h>
+#include <ctype.h>
+
+#include "pcre.h"
 
 #include "StreamFormatConverter.h"
 #include "StreamError.h"
-#include "string.h"
-#include "pcre.h"
-#include <limits.h>
 
 #define Z PRINTF_SIZE_T_PREFIX
 
@@ -197,54 +202,94 @@ static void regsubst(const StreamFormat& fmt, StreamBuffer& buffer, size_t start
             debug("pcre_exec: no match\n");
             break;
         }
-        if (!(fmt.flags & sign_flag) && n < fmt.prec) // without + flag
-        {
-            // do not yet replace this match
-            c += ovector[1];
-            continue;
-        }
-        // replace subexpressions
         l = ovector[1] - ovector[0];
-        debug("before [%d]= \"%s\"\n", ovector[0], buffer.expand(start+c,ovector[0])());
-        debug("match  [%d]= \"%s\"\n", l, buffer.expand(start+c+ovector[0],l)());
-        for (r = 1; r < rc; r++)
-            debug("sub%d = \"%s\"\n", r, buffer.expand(start+c+ovector[r*2], ovector[r*2+1]-ovector[r*2])());
-        debug("after     = \"%s\"\n", buffer.expand(start+c+ovector[1])());
-        s = subst;
-        debug("subs      = \"%s\"\n", s.expand()());
-        for (r = 0; r < (int)s.length(); r++)
+
+        // no prec: replace all matches
+        // prec with + flag: replace first prec matches
+        // prec without + flag: replace only match number prec
+
+        if ((fmt.flags & sign_flag) || n >= fmt.prec)
         {
-            debug("check \"%s\"\n", s.expand(r)());
-            if (s[r] == esc)
+            // replace subexpressions
+            debug("before [%d]= \"%s\"\n", ovector[0], buffer.expand(start+c,ovector[0])());
+            debug("match  [%d]= \"%s\"\n", l, buffer.expand(start+c+ovector[0],l)());
+            for (r = 1; r < rc; r++)
+                debug("sub%d = \"%s\"\n", r, buffer.expand(start+c+ovector[r*2], ovector[r*2+1]-ovector[r*2])());
+            debug("after     = \"%s\"\n", buffer.expand(start+c+ovector[1])());
+            s = subst;
+            debug("subs      = \"%s\"\n", s.expand()());
+            for (r = 0; r < (int)s.length(); r++)
             {
-                unsigned char ch = s[r+1];
-                debug("found escaped \\%u, in range 1-%d?\n", ch, rc-1);
-                if (ch != 0 && ch < rc) // escaped 1 - 9 : replace with subexpr
+                debug("check \"%s\"\n", s.expand(r)());
+                if (s[r] == esc)
                 {
-                    ch *= 2;
-                    rl = ovector[ch+1] - ovector[ch];
-                    debug("yes, replace \\%d: \"%s\"\n", ch/2, buffer.expand(start+c+ovector[ch], rl)());
-                    s.replace(r, 2, buffer(start+c+ovector[ch]), rl);
-                    r += rl - 1;
+                    unsigned char ch = s[r+1];
+                    if (strchr("ulUL", ch))
+                    {
+                        unsigned char br = s[r+2] - '0';
+                        if (br == (unsigned char)('&'-'0')) br = 0;
+                        debug("found case conversion \\%c%u\n", ch, br);
+                        if (br >= rc)
+                        {
+                            s.remove(r, 1);
+                            continue;
+                        }
+                        br *= 2;
+                        rl = ovector[br+1] - ovector[br];
+                        s.replace(r, 3, buffer(start+c+ovector[br]), rl);
+                        switch (ch)
+                        {
+                            case 'u':
+                                if (islower(s[r])) s[r] = toupper(s[r]);
+                                break;
+                            case 'l':
+                                if (isupper(s[r])) s[r] = tolower(s[r]);
+                                break;
+                            case 'U':
+                                for (int i = 0; i < rl; i++)
+                                    if (islower(s[r+i])) s[r+i] = toupper(s[r+i]);
+                                break;
+                            case 'L':
+                                for (int i = 0; i < rl; i++)
+                                    if (isupper(s[r+i])) s[r+i] = tolower(s[r+i]);
+                                break;
+                        }
+                    }
+                    else if (ch != 0 && ch < rc) // escaped 1 - 9 : replace with subexpr
+                    {
+                        debug("found escaped \\%u\n", ch);
+                        ch *= 2;
+                        rl = ovector[ch+1] - ovector[ch];
+                        debug("yes, replace \\%d: \"%s\"\n", ch/2, buffer.expand(start+c+ovector[ch], rl)());
+                        s.replace(r, 2, buffer(start+c+ovector[ch]), rl);
+                        r += rl - 1;
+                    }
+                    else
+                    {
+                        debug("use literal \\%u\n", ch);
+                        s.remove(r, 1); // just remove escape
+                    }
                 }
-                else
+                else if (s[r] == '&') // unescaped & : replace with match
                 {
-                    debug("no, use literal \\%u\n", ch);
-                    s.remove(r, 1); // just remove escape
+                    debug("replace &: \"%s\"\n", buffer.expand(start+c+ovector[0], l)());
+                    s.replace(r, 1, buffer(start+c+ovector[0]), l);
+                    r += l - 1;
                 }
+                else continue;
+                debug("subs = \"%s\"\n", s.expand()());
             }
-            else if (s[r] == '&') // unescaped & : replace with match
-            {
-                debug("replace &: \"%s\"\n", buffer.expand(start+c+ovector[0], l)());
-                s.replace(r, 1, buffer(start+c+ovector[0]), l);
-                r += l - 1;
-            }
-            else continue;
-            debug("subs = \"%s\"\n", s.expand()());
+            buffer.replace(start+c+ovector[0], l, s);
+            length -= l;
+            length += s.length();
+            c += s.length();
         }
-        buffer.replace(start+c+ovector[0], l, s);
-        length += s.length() - l;
-        c += ovector[0] + s.length();
+        c += ovector[0];
+        if (l == 0)
+        {
+            debug("pcre_exec: empty match\n");
+            c++; // Empty strings may lead to an endless loop. Match them only once.
+        }
         if (n == fmt.prec) // max match reached
         {
             debug("pcre_exec: max match %d reached\n", n);

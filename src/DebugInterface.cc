@@ -1,21 +1,24 @@
-/***************************************************************
-* StreamDevice Support                                         *
-*                                                              *
-* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)                    *
-*                                                              *
-* This is the interface to a debug and example bus drivers for *
-* StreamDevice. Please refer to the HTML files in ../doc/ for  *
-* a detailed documentation.                                    *
-*                                                              *
-* If you do any changes in this file, you are not allowed to   *
-* redistribute it any more. If there is a bug or a missing     *
-* feature, send me an email and/or your patch. If I accept     *
-* your changes, they will go to the next release.              *
-*                                                              *
-* DISCLAIMER: If this software breaks something or harms       *
-* someone, it's your problem.                                  *
-*                                                              *
-***************************************************************/
+/*************************************************************************
+* This is a debug and example bus interface for StreamDevice.
+* Please see ../docs/ for detailed documentation.
+*
+* (C) 2005 Dirk Zimoch (dirk.zimoch@psi.ch)
+*
+* This file is part of StreamDevice.
+*
+* StreamDevice is free software: You can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published
+* by the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* StreamDevice is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with StreamDevice. If not, see https://www.gnu.org/licenses/.
+*************************************************************************/
 
 #include "StreamBusInterface.h"
 #include "StreamError.h"
@@ -37,7 +40,7 @@ class DebugInterface : StreamBusInterface
     bool writeRequest(const void* output, size_t size,
         unsigned long writeTimeout_ms);
     bool readRequest(unsigned long replyTimeout_ms,
-        unsigned long readTimeout_ms, size_t expectedLength, bool async);
+        unsigned long readTimeout_ms, ssize_t expectedLength, bool async);
 
 protected:
     ~DebugInterface();
@@ -169,9 +172,9 @@ writeRequest(const void* output, size_t size, unsigned long writeTimeout_ms)
 // Return false if the read request cannot be accepted.
 bool DebugInterface::
 readRequest(unsigned long replyTimeout_ms, unsigned long readTimeout_ms,
-    size_t expectedLength, bool async)
+    ssize_t expectedLength, bool async)
 {
-    debug("DebugInterface::readRequest(%s, %ld msec reply, %ld msec read, expect %" Z "u bytes, asyn=%s)\n",
+    debug("DebugInterface::readRequest(%s, %ld msec reply, %ld msec read, expect %" Z "d bytes, asyn=%s)\n",
         clientName(), replyTimeout_ms, readTimeout_ms, expectedLength, async?"yes":"no");
 
     // Debug interface does not support async mode.
